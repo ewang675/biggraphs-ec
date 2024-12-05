@@ -48,7 +48,7 @@ void top_down_step(
             int outgoing = g->outgoing_edges[neighbor];
             if (distances[outgoing] == NOT_VISITED_MARKER && __sync_bool_compare_and_swap(&distances[outgoing], NOT_VISITED_MARKER, distances[node] + 1)) {
                 local_frontiers[omp_get_thread_num()].vertices[local_frontiers[omp_get_thread_num()].count] = outgoing;
-                local_frontiers[omp_get_thread_num()].count++; 
+                local_frontiers[omp_get_thread_num()].count++;
             }
         }
     }
@@ -98,7 +98,7 @@ void bfs_top_down(Graph graph, solution* sol) {
     for (int i = 0; i < omp_get_max_threads(); i++) {
         vertex_set_init(&local_frontiers[i], graph->num_nodes);
     }
-    
+
     while (frontier->count != 0) {
 
 #ifdef VERBOSE
@@ -119,6 +119,38 @@ void bfs_top_down(Graph graph, solution* sol) {
     }
 }
 
+void bottom_up_step(
+    Graph g,
+    bool* frontier,
+    bool* new_frontier,
+    bool* empty,
+    int* distances)
+{
+    #pragma omp parallel for
+    for (int node = 0; node < g->num_nodes; node++) {
+        if (distances[node] == NOT_VISITED_MARKER) {
+            int start_edge = g->incoming_starts[node];
+            int end_edge = (node == g->num_nodes - 1)
+                           ? g->num_edges
+                           : g->incoming_starts[node + 1];
+
+            // check if there is an incoming edge from a frontier node
+            for (int neighbor = start_edge; neighbor < end_edge; neighbor++) {
+                int incoming = g->incoming_edges[neighbor];
+                if (frontier[incoming]) {
+                    if (__sync_bool_compare_and_swap(&distances[node], NOT_VISITED_MARKER, distances[incoming] + 1)) {
+                        new_frontier[node] = true;
+                        if (*empty) {
+                            __sync_bool_compare_and_swap(empty, true, false);
+                        }
+                    }
+                }
+            }
+        }
+
+    }
+}
+
 void bfs_bottom_up(Graph graph, solution* sol)
 {
     // CS149 students:
@@ -132,6 +164,51 @@ void bfs_bottom_up(Graph graph, solution* sol)
     // As was done in the top-down case, you may wish to organize your
     // code by creating subroutine bottom_up_step() that is called in
     // each step of the BFS process.
+
+    bool * frontier = (bool *) (malloc(sizeof(bool) * graph->num_nodes));
+    bool * new_frontier = (bool *) (malloc(sizeof(bool) * graph->num_nodes));
+
+    // initialize distances
+    #pragma omp parallel for
+    for (int i=0; i<graph->num_nodes; i++)
+        sol->distances[i] = NOT_VISITED_MARKER;
+    sol->distances[ROOT_NODE_ID] = 0;
+
+    // initialize frontier
+    #pragma omp parallel for
+    for (int i = 0; i < graph->num_nodes; i ++) {
+        frontier[i] = false;
+    }
+    frontier[ROOT_NODE_ID] = true; 
+
+    bool empty = false;  
+    
+    while (!empty) {
+
+#ifdef VERBOSE
+        double start_time = CycleTimer::currentSeconds();
+#endif 
+        // clear variables
+        empty = true;
+        #pragma omp parallel for
+        for (int i = 0; i < graph->num_nodes; i ++) {
+            new_frontier[i] = false;
+        }
+
+        bottom_up_step(graph, frontier, new_frontier, &empty, sol->distances);
+
+#ifdef VERBOSE
+    double end_time = CycleTimer::currentSeconds();
+    printf("frontier=%-10d %.4f sec\n", frontier->count, end_time - start_time);
+#endif
+        
+        bool* tmp = frontier;
+        frontier = new_frontier;
+        new_frontier = tmp;
+
+    }
+    
+
 }
 
 void bfs_hybrid(Graph graph, solution* sol)
